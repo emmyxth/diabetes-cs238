@@ -10,9 +10,10 @@ import numpy as np
 from scipy.integrate import odeint
 from scipy.stats import truncnorm
 from scipy.signal import savgol_filter
+import matplotlib.pyplot as plt
 
 
-class Diabetic0Env(gym.Env):
+class Diabetic2Env(gym.Env):
 
     """
     Description:
@@ -60,10 +61,8 @@ class Diabetic0Env(gym.Env):
         self.u = None
 
         # Defining possible actions
-        # self.action_space = spaces.Box(
-        #     0.0, 10.0, shape=(1,)
-        # )  # agent can take actions that are single real numbers (floats) in the range from 0.0 to 10.0.
-        self.action_space = spaces.Discrete(20)  # redefining the number of actions
+        # self.action_space = spaces.Box(0.0, 10.0, shape=(1,))
+        self.action_space = spaces.Discrete(11)
 
         # Defining observation space
         lows = np.zeros(9)
@@ -78,13 +77,6 @@ class Diabetic0Env(gym.Env):
         # Store what the agent tried
         self.curr_step = 0
         self.are_we_done = False
-
-    def map_continuous_to_discrete(self, continuous_action):
-        # Ensure the action is within the bounds
-        continuous_action = np.clip(continuous_action, 0, 10)
-        # Convert to discrete action
-        discrete_action = int((continuous_action / 10.0) * self.action_space.n)
-        return discrete_action
 
     def set_episode_length(self, minute_interval):
         """
@@ -139,11 +131,10 @@ class Diabetic0Env(gym.Env):
                 "You need to reset() the environment before calling step()!"
             )
 
-        discrete_action = self.map_continuous_to_discrete(action)
-
         # add new action to dose list
-        # self.u.append(action[0])
-        self.u.append(discrete_action)
+        action_temp = []
+        action_temp.append(float(action))
+        self.u.append(action_temp[0])
 
         # check if we're done
         if self.curr_step >= self.episode_length - 2:
@@ -342,239 +333,51 @@ class Diabetic0Env(gym.Env):
         for i in range(len(meals)):
             self.d[i + 43] = meals[i]
 
-        state, _, _, _ = self.step(self.u)
+        state, _, _, _ = self.step(self.u[0])
 
         return state
 
     def seed(self, seed=None):
         self.np_random, _ = seeding.np_random(seed)
 
+    def render(self, mode="human"):
+        if mode == "human":
+            # Check if we have enough data to render
+            if self.G is None or len(self.G) == 0:
+                print("No data to render yet.")
+                return
 
-class Diabetic1Env(gym.Env):
+            # Create a figure
+            plt.figure(figsize=(10, 8))
 
-    """
-    Description:
-        See dosing_rl/resources/Diabetic Background.ipynb
-    Source:
-        See dosing_rl/resources/Diabetic Background.ipynb
-    Observation:
-        Type: Box(9)
-                                                                Min         Max
-        0	Blood Glucose                                       0           Inf
-        1	Remote Insulin                                      0           Inf
-        2	Plasma Insulin                                      0           Inf
-        3	S1                                                  0           Inf
-        4	S2                                                  0           Inf
-        5	Gut blood glucose                                   0           Inf
-        6	Meal disturbance                                    0           Inf
-        7	Previous Blood glucose                              0           Inf
-        8   Previous meal disturbance                           0           Inf
+            # Plot Blood Glucose
+            plt.subplot(3, 1, 1)
+            plt.plot(self.G, label="Blood Glucose", color="blue")
+            plt.xlabel("Time Step")
+            plt.ylabel("Blood Glucose")
+            plt.title("Blood Glucose over Time")
+            plt.legend()
 
-    Actions:
-        Type: Continuous
-        Administered Insulin pump [mU/min]
+            # Plot Insulin Administered
+            plt.subplot(3, 1, 2)
+            plt.plot(self.u, label="Insulin Administered", color="green")
+            plt.xlabel("Time Step")
+            plt.ylabel("Insulin (mU/min)")
+            plt.title("Insulin Administered over Time")
+            plt.legend()
 
-    Reward:
-        smooth function centered at 80 (self.target)
-    Starting State:
-        http://apmonitor.com/pdc/index.php/Main/DiabeticBloodGlucose
-    Episode Termination:
-        self.episode_length reached
-    """
+            # Plot Meal Disturbance
+            plt.subplot(3, 1, 3)
+            plt.plot(self.d, label="Meal Disturbance", color="orange")
+            plt.xlabel("Time Step")
+            plt.ylabel("Disturbance (mmol/L-min)")
+            plt.title("Meal Disturbance over Time")
+            plt.legend()
 
-    def __init__(self):
-        self.__version__ = "0.0.1"
-
-        # General variables defining the environment
-        self.base_path = os.path.dirname(os.path.abspath(__file__))
-        self.seed()
-
-        # Lists that will hold episode data
-        self.opt_states = None
-        self.G = None
-        self.X = None
-        self.I = None
-        self.d = None
-        self.u = None
-
-        # Defining possible actions
-        self.action_space = spaces.Box(0.0, 10.0, shape=(1,))
-
-        # Defining observation space
-        lows = np.zeros(9)
-        highs = np.ones(9) * np.inf
-        self.observation_space = spaces.Box(lows, highs)
-
-        # Reward definitions
-        self.target = 80.0
-        self.lb = 65.0
-        self.ub = 105.0
-
-        # Store what the agent tried
-        self.curr_step = 0
-        self.are_we_done = False
-
-    def set_episode_length(self, minute_interval):
-        """
-        :param minute_interval: how often we will record information, make a recommendation
-        The smaller this is, the longer an episode (patient trajectory) is
-        :return:
-        """
-        self.minute_interval = minute_interval
-        ns = int((24 * 60) / self.minute_interval) + 1
-        # Final Time (hr)
-        tf = 24  # simulate for 24 hours
-        # Time Interval (min)
-        self.t = np.linspace(0, tf, ns)
-        self.episode_length = len(self.t)
-
-    def step(self, action):
-        """
-        The agent takes a step in the environment.
-
-        Parameters
-        ----------
-        action : list of length 1
-
-        Returns
-        -------
-        observation (state), reward, episode_over, info : tuple
-            ob (object) :
-                an environment-specific object representing your observation of
-                the environment.
-            reward (float) :
-                amount of reward achieved by the previous action. The scale
-                varies between environments, but the goal is always to increase
-                your total reward.
-            episode_over (bool) :
-                whether it's time to reset the environment again. Most (but not
-                all) tasks are divided up into well-defined episodes, and done
-                being True indicates the episode has terminated. (For example,
-                perhaps the pole tipped too far, or you lost your last life.)
-            info (dict) :
-                 diagnostic information useful for debugging. It can sometimes
-                 be useful for learning (for example, it might contain the raw
-                 probabilities behind the environment's last state change).
-                 However, official evaluations of your agent are not allowed to
-                 use this for learning.
-        """
-
-        # if self.are_we_done:
-        # raise RuntimeError("Episode is done")
-
-        if self.opt_states is None:
-            raise Exception(
-                "You need to reset() the environment before calling step()!"
-            )
-
-        # add new action to dose list
-        self.u.append(action[0])
-
-        # check if we're done
-        if self.curr_step >= self.episode_length - 2:
-            self.are_we_done = True
-
-        # get updated time step
-        ts = [self.t[self.curr_step], self.t[self.curr_step + 1]]
-
-        # simulate
-        y = odeint(
-            diabetic,
-            self.opt_states,
-            ts,
-            args=(self.u[self.curr_step + 1], self.d[self.curr_step + 1]),
-        )
-
-        # update lists with updated state values
-        self.G.append(y[-1][0])
-        self.X.append(y[-1][1])
-        self.I.append(y[-1][2])
-        self.opt_states = y[-1]
-
-        state = np.array(
-            [
-                self.opt_states[0],
-                self.opt_states[1],
-                self.opt_states[2],
-                self.opt_states[3],
-                self.opt_states[4],
-                self.opt_states[5],
-                self.d[self.curr_step + 1],
-                self.G[-2],
-                self.d[self.curr_step],
-            ]
-        )
-
-        reward = self._get_reward()
-
-        # increment episode
-        self.curr_step += 1
-
-        return state, reward, self.are_we_done, {}
-
-    def _get_reward(self):
-        """
-        Reward is based on smooth function.
-        Target blood glucose level: 80
-        g parameter will change slope: 0.7
-        """
-        g = 0.7
-        r = 1 - np.tanh(np.abs((self.G[-1] - self.target) / g) * 0.1) ** 2
-        if (self.G[-1] < self.lb) or (self.G[-1] > self.ub):
-            r = -1.0
-
-        return r
-
-    def reset(self):
-        """
-        Reset the state of the environment and returns an initial observation (state)
-        """
-
-        self.curr_step = 0
-        self.are_we_done = False
-
-        # Steady State Initial Conditions for the States
-        self.opt_states = np.array(
-            [
-                self.np_random.uniform(self.lb, self.ub),
-                self.np_random.normal(33.33, 5),
-                self.np_random.normal(33.33, 5),
-                self.np_random.normal(25.0, 5),
-                self.np_random.normal(25.0, 5),
-                self.np_random.normal(250.0, 5),
-            ]
-        )
-
-        # Steady State Initial Condition for the Control
-        first_dose = self.np_random.choice(
-            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-        )  # mU/min
-
-        # Steady State for the Disturbance
-        d_ss = self.np_random.uniform(800.0, 1200.0)  # mmol/L-min
-
-        # Store results for plotting
-        self.G = [self.opt_states[0]]
-        self.X = [self.opt_states[1]]
-        self.I = [self.opt_states[2]]
-
-        self.u = [first_dose]
-
-        # Probabilistic meal disturbance vector
-        self.d = get_meal_data(
-            iterations=1,
-            base_value=d_ss,
-            meal_length=self.episode_length,
-            rs=self.np_random,
-            minute_interval=self.minute_interval,
-        )
-
-        state, _, _, _ = self.step(self.u)
-
-        return state
-
-    def seed(self, seed=None):
-        self.np_random, _ = seeding.np_random(seed)
+            plt.tight_layout()
+            plt.show()
+        else:
+            super(Diabetic2Env, self).render(mode=mode)
 
 
 def get_meal_data(

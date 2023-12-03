@@ -60,10 +60,7 @@ class Diabetic0Env(gym.Env):
         self.u = None
 
         # Defining possible actions
-        # self.action_space = spaces.Box(
-        #     0.0, 10.0, shape=(1,)
-        # )  # agent can take actions that are single real numbers (floats) in the range from 0.0 to 10.0.
-        self.action_space = spaces.Discrete(20)  # redefining the number of actions
+        self.action_space = spaces.Box(0.0, 10.0, shape=(1,))
 
         # Defining observation space
         lows = np.zeros(9)
@@ -78,13 +75,6 @@ class Diabetic0Env(gym.Env):
         # Store what the agent tried
         self.curr_step = 0
         self.are_we_done = False
-
-    def map_continuous_to_discrete(self, continuous_action):
-        # Ensure the action is within the bounds
-        continuous_action = np.clip(continuous_action, 0, 10)
-        # Convert to discrete action
-        discrete_action = int((continuous_action / 10.0) * self.action_space.n)
-        return discrete_action
 
     def set_episode_length(self, minute_interval):
         """
@@ -139,11 +129,8 @@ class Diabetic0Env(gym.Env):
                 "You need to reset() the environment before calling step()!"
             )
 
-        discrete_action = self.map_continuous_to_discrete(action)
-
         # add new action to dose list
-        # self.u.append(action[0])
-        self.u.append(discrete_action)
+        self.u.append(action[0])
 
         # check if we're done
         if self.curr_step >= self.episode_length - 2:
